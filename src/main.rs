@@ -10,6 +10,67 @@ use regex::Regex;
 use xml::{Event, Parser};
 use std::path::Path;
 
+/// Gets the actual installed Oracle driver versions and checks contents
+/// of GAC against the expected versions.
+/// Spits out a list of gacutil /u commands to run to fix GAC.
+fn main() {
+
+    // open Oracle inventory
+    let inventory32 = match read_ora_inventory("c:\\Program Files (x86)\\Oracle\\") {
+        Ok(data) => data,
+        _ => "".to_string(),
+    };
+    let inventory64 = match read_ora_inventory("c:\\Program Files\\Oracle\\") {
+        Ok(data) => data,
+        _ => "".to_string(),
+    };
+    
+    // parse version out of XML
+    let version32 = match !inventory32.is_empty() { 
+        true => parse_version(&*inventory32).unwrap(),
+        _ => "".to_string(),
+    };
+    let version64 = match !inventory64.is_empty() { 
+        true => parse_version(&*inventory64).unwrap(),
+        _ => "".to_string(),
+    };
+    
+    // check main installed drivers match
+    if version32.is_empty() && version64.is_empty() { 
+        println!("No Oracle install found."); 
+    } else if !version32.is_empty() && !version64.is_empty() && version32!=version64 {
+        println!("Version {} (32-bit) and version {} (64-bit) found.",version32,version64);
+    } else {
+        // get single expected version
+        let ora_version = if version32.is_empty() { version64 } else { version32 };
+
+        // get Oracle version string in .NET format to match .NET Oracle driver
+        let expected = get_net_match_ver(&*ora_version).unwrap();
+        println!("");
+        println!("Expected .NET version is: {}",expected);
+        println!("-----------------------------------");
+        
+        // scan gac for later incorrect versions
+        let kill_assembly_list32 = scan_gac("c:/windows/assembly/GAC_32/",&*expected).unwrap();
+        if kill_assembly_list32.len()==0 {
+            println!("No 32-bit components found to uninstall.");
+        }
+        // assemblies to remove
+        for assembly in kill_assembly_list32 {
+            println!("gacutil /u \"{}\"",assembly);
+        }
+        let kill_assembly_list64 = scan_gac("c:/windows/assembly/GAC_64/",&*expected).unwrap();
+        if kill_assembly_list64.len()==0 {
+            println!("No 64-bit components found to uninstall.");
+        }
+        // assemblies to remove
+        for assembly in kill_assembly_list64 {
+            println!("gacutil /u \"{}\"",assembly);
+        }
+    }
+}
+
+
 /// Traverses the Inventory and ContentsXML subfolders and returns
 /// the contents of the inventory.xml file.
 ///
@@ -22,9 +83,8 @@ fn read_ora_inventory( inventory_loc: &str ) -> io::Result<String> {
     file_path.push_str(".\\Inventory\\ContentsXML\\inventory.xml");
     
     // slurp xml file and return
-    let mut f = try!(File::open(file_path));
     let mut s = String::new();
-    match f.read_to_string(&mut s) {
+    match File::open(file_path)?.read_to_string(&mut s) {
         Ok(_) => Ok(s),
         Err(e) => Err(e),
     }
@@ -43,17 +103,18 @@ fn parse_version( inventory: &str ) -> io::Result<String> {
     let mut found = false;
     let mut version = String::new();
     for event in p {
-        match event.unwrap() {
-            Event::ElementStart(tag) => { 
+        match event {
+            Ok(Event::ElementStart(tag)) => { 
                 if tag.name.as_str()=="SAVED_WITH" {
                     found = true; 
                 }},
-            Event::Characters(verstr) => { 
+            Ok(Event::Characters(verstr)) => { 
                 if found { 
                     version.push_str(&verstr);
                     found = false;
                 }},
-            _ => ()
+            Ok(_) => (),
+            Err(_) => (),
         }
     }
     match version.is_empty() {
@@ -161,53 +222,4 @@ fn scan_gac( gac: &str, expected: &str ) -> io::Result<Vec<String>> {
         }
     }
     Ok(vec)
-}
-
-
-fn main() {
-
-    // open Oracle inventory
-    let inventory32 = match read_ora_inventory("c:\\Program Files (x86)\\Oracle\\") {
-        Ok(data) => data,
-        _ => "".to_string(),
-    };
-    let inventory64 = match read_ora_inventory("c:\\Program Files\\Oracle\\") {
-        Ok(data) => data,
-        _ => "".to_string(),
-    };
-    
-    // parse version out of XML
-    let version32 = match !inventory32.is_empty() { 
-        true => parse_version(&*inventory32).unwrap(),
-        _ => "".to_string(),
-    };
-    let version64 = match !inventory64.is_empty() { 
-        true => parse_version(&*inventory64).unwrap(),
-        _ => "".to_string(),
-    };
-    
-    // check drivers match
-    if version32.is_empty() && version64.is_empty() { panic!("No Oracle install found."); };
-    if !version32.is_empty() && !version64.is_empty() && version32!=version64 {
-        println!("Version {} (32-bit) and version {} (64-bit) found.",version32,version64);
-        panic!("Different Oracle versions installed.");
-    };
-    
-    // get single expected version
-    let ora_version = if version32.is_empty() { version64 } else { version32 };
-
-    // get version to match .NET Oracle driver
-    let expected = get_net_match_ver(&*ora_version).unwrap();
-    println!("Expected .NET version is: {}",expected);
-    println!("");
-    
-    // scan gac for later versions
-    let kill_assembly_list32 = scan_gac("c:/windows/assembly/GAC_32/",&*expected).unwrap();
-    for assembly in kill_assembly_list32 {
-        println!("gacutil /u \"{}\"",assembly);
-    }
-    let kill_assembly_list64 = scan_gac("c:/windows/assembly/GAC_64/",&*expected).unwrap();
-    for assembly in kill_assembly_list64 {
-        println!("gacutil /u \"{}\"",assembly);
-    }
 }
