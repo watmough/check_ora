@@ -1,0 +1,8 @@
+[package]
+name = "check_ora"
+version = "0.1.0"
+authors = ["jonathan"]
+
+[dependencies]
+regex = "0.1"
+RustyXML = "0.1.1"
